@@ -1,4 +1,4 @@
-export type NoteType = 'accent' | 'ghost' | 'empty';
+export type NoteType = 'accent' | 'ghost' | 'slap' | 'rest' | 'empty';
 
 export interface Note {
   id: string;
@@ -10,9 +10,10 @@ export interface Note {
 export interface Step {
   noteId: string | null;
   type: NoteType;
+  modifier?: 'harmonic' | 'choke' | 'none';
 }
 
-export type DensityLevel = 1 | 2 | 3;
+export type DensityLevel = 1 | 2 | 3 | 4 | 5;
 
 export type GrooveType = 'straight' | 'malfuf' | 'halftime';
 
@@ -24,5 +25,5 @@ export interface GrooveProject {
   createdAt: string;
   bpm: number;
   matrixVibe: GrooveType;
-  sequence: Step[];
+  sequence: Step[]; // Now 64 steps
 }

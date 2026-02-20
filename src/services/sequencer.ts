@@ -17,9 +17,11 @@ export class Sequencer {
   private sequence: Step[] = [];
   private density: DensityLevel = 3;
   
-  private onStepCallback: ((stepIndex: number, noteId: string | null, type: string) => void) | null = null;
+  private onStepCallback: ((stepIndex: number, noteId: string | null, type: string, modifier?: string) => void) | null = null;
   private onBPMChangeCallback: ((bpm: number) => void) | null = null;
   private onMetronomeCallback: ((beatNumber: number) => void) | null = null;
+
+  private focusedBar: number | null = null; // 0-3 (Bar 1-4)
 
   constructor() {
     // Bind methods
@@ -38,6 +40,15 @@ export class Sequencer {
     this.density = d;
   }
 
+  public setFocusedBar(barIndex: number | null) {
+    this.focusedBar = barIndex;
+    
+    if (barIndex !== null) {
+       const currentBeatInBar = this.current16thNote % 16;
+       this.current16thNote = (barIndex * 16) + currentBeatInBar;
+    }
+  }
+
   public setBaseBPM(bpm: number) {
     this.baseBPM = bpm;
     if (this.tempoMode === 'static') {
@@ -48,13 +59,11 @@ export class Sequencer {
 
   public setTempoMode(mode: TempoMode) {
     this.tempoMode = mode;
-    // Reset loop count when switching modes to ensure predictable behavior? 
-    // Or just let it flow. Let's reset loop count to 0 to restart the "song" structure feel.
     this.loopCount = 0;
     this.updateBPM();
   }
 
-  public setOnStep(cb: (stepIndex: number, noteId: string | null, type: string) => void) {
+  public setOnStep(cb: (stepIndex: number, noteId: string | null, type: string, modifier?: string) => void) {
     this.onStepCallback = cb;
   }
 
@@ -130,10 +139,22 @@ export class Sequencer {
     this.nextNoteTime += secondsPer16th;
     
     this.current16thNote++;
-    if (this.current16thNote === 16) {
-      this.current16thNote = 0;
-      this.loopCount++;
-      this.updateBPM();
+
+    // Focused Bar Logic
+    if (this.focusedBar !== null) {
+       const startStep = this.focusedBar * 16;
+       const endStep = startStep + 16;
+       
+       if (this.current16thNote >= endStep) {
+          this.current16thNote = startStep;
+       }
+    } else {
+       // Full 64-step loop
+       if (this.current16thNote === 64) {
+         this.current16thNote = 0;
+         this.loopCount++;
+         this.updateBPM();
+       }
     }
   }
 
@@ -143,7 +164,7 @@ export class Sequencer {
         const timeUntilBeat = (time - audioEngine.currentTime) * 1000;
         setTimeout(() => {
             if (this.isPlaying && this.onMetronomeCallback) {
-                this.onMetronomeCallback(beatNumber);
+                this.onMetronomeCallback(beatNumber % 16); // Keep metronome visual 0-15
             }
         }, Math.max(0, timeUntilBeat));
     }
@@ -155,38 +176,79 @@ export class Sequencer {
     // Density Logic
     let shouldPlay = false;
 
-    if (step.type === 'empty') return;
+    if (step.type === 'empty' || step.type === 'rest') return;
 
     if (this.density === 1) {
-      // Skeleton: Accents on 0, 4, 8, 12 only
-      if (step.type === 'accent' && beatNumber % 4 === 0) {
+      // Level 1: Absolute Anchors (Accents on Beat 0 and 8 of any bar)
+      const barStep = beatNumber % 16;
+      if (step.type === 'accent' && (barStep === 0 || barStep === 8)) {
         shouldPlay = true;
       }
     } else if (this.density === 2) {
-      // All Accents, no ghosts
+      // Level 2: All Accents. Mute ghosts and slaps.
       if (step.type === 'accent') {
         shouldPlay = true;
       }
+    } else if (this.density === 3) {
+      // Level 3: All Accents + Slaps. Mute ghosts.
+      if (step.type === 'accent' || step.type === 'slap') {
+        shouldPlay = true;
+      }
+    } else if (this.density === 4) {
+      // Level 4: Accents + Slaps + 50% Ghosts
+      if (step.type === 'accent' || step.type === 'slap') {
+        shouldPlay = true;
+      } else if (step.type === 'ghost') {
+         // Deterministic 50% (e.g., even steps only) to avoid jitter
+         if (beatNumber % 2 === 0) {
+            shouldPlay = true;
+         }
+      }
     } else {
-      // Full: Accents + Ghosts
+      // Level 5: Full Flow (Everything)
       shouldPlay = true;
     }
 
-    if (shouldPlay && step.noteId) {
-      const note = HANDPAN_NOTES.find(n => n.id === step.noteId);
-      if (note) {
-        const velocity = step.type === 'accent' ? 0.9 : 0.2;
-        const duration = step.type === 'accent' ? 2.0 : 0.2;
-        
-        audioEngine.playTone(note.frequency, 'sine', duration, velocity, time);
+    if (shouldPlay) {
+      if (step.type === 'slap') {
+         // Slap has no noteId usually, or we ignore it
+         audioEngine.playTone(0, 'sine', 0.1, 1.2, time); // 1.2 velocity triggers slap
+         
+         // Visual for slap? Maybe flash center red?
+         const timeUntilNote = (time - audioEngine.currentTime) * 1000;
+         setTimeout(() => {
+             if (this.isPlaying && this.onStepCallback) {
+                 this.onStepCallback(beatNumber, 'slap', 'slap', step.modifier);
+             }
+         }, Math.max(0, timeUntilNote));
 
-        // Visual Sync
-        const timeUntilNote = (time - audioEngine.currentTime) * 1000;
-        setTimeout(() => {
-            if (this.isPlaying && this.onStepCallback) {
-                this.onStepCallback(beatNumber, step.noteId, step.type);
-            }
-        }, Math.max(0, timeUntilNote));
+      } else if (step.noteId) {
+        const note = HANDPAN_NOTES.find(n => n.id === step.noteId);
+        if (note) {
+          let velocity = step.type === 'accent' ? 0.9 : 0.2;
+          let duration = step.type === 'accent' ? 2.0 : 0.2;
+          let frequency = note.frequency;
+
+          // Apply Modifiers
+          if (step.modifier === 'harmonic') {
+            frequency *= 2; // Octave up
+            velocity *= 0.8; // Slightly softer
+            duration = 3.0; // Longer ring
+          } else if (step.modifier === 'choke') {
+            duration = 0.05; // Very short
+            velocity *= 0.7;
+          }
+          
+          audioEngine.playTone(frequency, 'sine', duration, velocity, time);
+
+          // Visual Sync
+          const timeUntilNote = (time - audioEngine.currentTime) * 1000;
+          setTimeout(() => {
+              if (this.isPlaying && this.onStepCallback) {
+                  this.onStepCallback(beatNumber, step.noteId!, step.type, step.modifier);
+              }
+          }, Math.max(0, timeUntilNote));
+        }
       }
     }
   }

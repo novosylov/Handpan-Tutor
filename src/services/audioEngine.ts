@@ -41,6 +41,15 @@ class AudioEngine {
 
     const t = startTime || this.context.currentTime;
     
+    // Slap Logic
+    // If velocity is very high (e.g. 1.2 for slap), we treat it as a percussive hit
+    const isSlap = velocity > 1.1;
+
+    if (isSlap) {
+       this.playSlap(t);
+       return;
+    }
+
     // Oscillator
     const osc = this.context.createOscillator();
     osc.type = type;
@@ -76,6 +85,44 @@ class AudioEngine {
       osc.disconnect();
       gain.disconnect();
     }, (attackTime + decayTime + 0.2) * 1000);
+  }
+
+  private playSlap(time: number) {
+     if (!this.context || !this.masterGain) return;
+     
+     // Create a buffer of noise
+     const bufferSize = this.context.sampleRate * 0.05; // 50ms
+     const buffer = this.context.createBuffer(1, bufferSize, this.context.sampleRate);
+     const data = buffer.getChannelData(0);
+     for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+     }
+
+     const noise = this.context.createBufferSource();
+     noise.buffer = buffer;
+
+     // Filter to make it sound like a shell hit (Bandpass)
+     const filter = this.context.createBiquadFilter();
+     filter.type = 'bandpass';
+     filter.frequency.value = 1200;
+     filter.Q.value = 1;
+
+     const gain = this.context.createGain();
+     gain.gain.setValueAtTime(0.8, time);
+     gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
+
+     noise.connect(filter);
+     filter.connect(gain);
+     gain.connect(this.masterGain);
+
+     noise.start(time);
+     noise.stop(time + 0.06);
+
+     setTimeout(() => {
+        noise.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+     }, 100);
   }
 
   public get currentTime() {
