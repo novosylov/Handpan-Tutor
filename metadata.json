@@ -1,0 +1,5 @@
+{
+  "name": "Handpan Rhythm Forge",
+  "description": "A web-based handpan instrument with generative rhythm capabilities.",
+  "requestFramePermissions": []
+}
