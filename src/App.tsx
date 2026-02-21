@@ -9,8 +9,13 @@ import { generateGroove } from './services/grooveGenerator';
 import { generateSequence, PhraseStructure, GENERATOR_STYLES } from './services/generativeEngine';
 import { saveGroove, importGrooveFromFile } from './services/storageService';
 import { DensityLevel, GrooveType, TempoMode, GrooveProject, Step } from './types';
-import { Play, Square, RefreshCw, Layers, Activity, Music, Zap, Save, FolderOpen, Upload, Eye, EyeOff, Minus, Plus, Sparkles, ChevronDown, Check } from 'lucide-react';
+import { Play, Square, RefreshCw, Save, FolderOpen, Eye, EyeOff, Minus, Plus, Sparkles, ChevronDown, Check, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+// --- CONSTANTS ---
+const MIN_BPM = 40;
+const MAX_BPM = 180;
+const DEFAULT_PHRASE: PhraseStructure = ['A', 'A', 'A', 'B'];
 
 const TEMPO_MARKS = [
   {name: 'Grave', bpm: 40},
@@ -28,27 +33,30 @@ const TEMPO_MARKS = [
 function AppContent() {
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [showMandala, setShowMandala] = useState(false);
+  
   const [density, setDensity] = useState<DensityLevel>(3);
   const [grooveType, setGrooveType] = useState<GrooveType>('straight');
   const [tempoMode, setTempoMode] = useState<TempoMode>('static');
+  
   const [selectedStyles, setSelectedStyles] = useState<string[]>(GENERATOR_STYLES.map(s => s.id));
   const [isStyleDropdownOpen, setIsStyleDropdownOpen] = useState(false);
+  const [isTempoDropdownOpen, setIsTempoDropdownOpen] = useState(false);
+  
   const [baseBPM, setBaseBPM] = useState(100);
   const [currentBPM, setCurrentBPM] = useState(100);
+  
   const [activeVisualNote, setActiveVisualNote] = useState<{ id: string; type: string; tick: number; modifier?: string } | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [sequence, setSequence] = useState<Step[]>([]);
   const [focusedBar, setFocusedBar] = useState<number | null>(null);
-  
-  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isMetronomeActive, setIsMetronomeActive] = useState(false);
-  const [showMandala, setShowMandala] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToast();
 
   useEffect(() => {
-    // Setup sequencer callback for visual sync
     sequencer.setOnStep((stepIndex, noteId, type, modifier) => {
       setCurrentStep(stepIndex);
       if (noteId) {
@@ -58,65 +66,70 @@ function AppContent() {
       }
     });
 
-    // Setup BPM monitor
-    sequencer.setOnBPMChange((bpm) => {
-      setCurrentBPM(bpm);
-    });
+    sequencer.setOnBPMChange((bpm) => setCurrentBPM(bpm));
 
-    // Setup Metronome
     sequencer.setOnMetronome(() => {
       setIsMetronomeActive(true);
       setTimeout(() => setIsMetronomeActive(false), 100);
     });
 
-    // Initial Groove
     const initialGroove = generateGroove('straight');
     sequencer.setSequence(initialGroove);
     setSequence(initialGroove);
 
     return () => {
       sequencer.stop();
+      sequencer.setOnStep(() => {});
+      sequencer.setOnBPMChange(() => {});
+      sequencer.setOnMetronome(() => {});
     };
   }, []);
 
   const handleTogglePlay = () => {
     if (!isAudioUnlocked) return;
-    
-    if (isPlaying) {
-      sequencer.stop();
-      setIsPlaying(false);
-    } else {
-      sequencer.start();
-      setIsPlaying(true);
+    try {
+      if (isPlaying) {
+        sequencer.pause();
+        setIsPlaying(false);
+      } else {
+        sequencer.resume();
+        setIsPlaying(true);
+      }
+    } catch (err) {
+      console.error(err);
+      addToast('Audio engine error. Please refresh.', 'error');
     }
   };
 
   const handleGenerateGroove = () => {
-    let newGroove: Step[] = [];
-    
-    // If only 'standard' is selected (or nothing), use legacy generator for pure standard feel
-    if (selectedStyles.length === 1 && selectedStyles[0] === 'standard') {
-      newGroove = generateGroove(grooveType, density);
-    } else {
-      // Use new engine with mixed styles
-      newGroove = generateSequence({
-        styles: selectedStyles,
-        phraseStructure: ['A', 'A', 'A', 'B'], // Standard 4-bar educational structure
-        densityBase: density
-      });
+    try {
+      let newGroove: Step[] = [];
+      if (selectedStyles.length === 1 && selectedStyles[0] === 'standard') {
+        newGroove = generateGroove(grooveType, density);
+      } else {
+        newGroove = generateSequence({
+          styles: selectedStyles,
+          phraseStructure: DEFAULT_PHRASE,
+          densityBase: density
+        });
+      }
+      setFocusedBar(null);
+      sequencer.setFocusedBar(null);
+      
+      sequencer.setSequence(newGroove);
+      setSequence(newGroove);
+      setCurrentStep(0);
+      addToast('Generated new groove', 'success');
+    } catch (err) {
+      console.error(err);
+      addToast('Failed to generate groove', 'error');
     }
-
-    sequencer.setSequence(newGroove);
-    setSequence(newGroove);
-    setCurrentStep(0);
-    addToast('Generated new groove', 'success');
   };
 
   const toggleStyle = (styleId: string) => {
     setSelectedStyles(prev => {
       if (prev.includes(styleId)) {
-        // Don't allow empty selection
-        if (prev.length === 1) return prev;
+        if (prev.length === 1) return prev; 
         return prev.filter(id => id !== styleId);
       } else {
         return [...prev, styleId];
@@ -124,23 +137,14 @@ function AppContent() {
     });
   };
 
-  const handleDensityChange = (val: DensityLevel) => {
-    setDensity(val);
-    sequencer.setDensity(val);
-  };
-
-  const handleGrooveTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setGrooveType(e.target.value as GrooveType);
-  };
-
-  const handleTempoModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const mode = e.target.value as TempoMode;
-    setTempoMode(mode);
-    sequencer.setTempoMode(mode);
+  const handleDensityChange = (val: number) => {
+    const safeVal = Math.max(1, Math.min(5, val)) as DensityLevel;
+    setDensity(safeVal);
+    sequencer.setDensity(safeVal);
   };
 
   const handleBaseBPMChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value);
+    const val = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(e.target.value) || 100));
     setBaseBPM(val);
     sequencer.setBaseBPM(val);
   };
@@ -148,39 +152,38 @@ function AppContent() {
   const jumpTempo = (direction: -1 | 1) => {
     let newBPM = baseBPM;
     if (direction === -1) {
-      // Find largest mark strictly less than current
       const target = [...TEMPO_MARKS].reverse().find(m => m.bpm < baseBPM);
-      newBPM = target ? target.bpm : Math.max(40, baseBPM - 5);
+      newBPM = target ? target.bpm : Math.max(MIN_BPM, baseBPM - 5);
     } else {
-      // Find smallest mark strictly greater than current
       const target = TEMPO_MARKS.find(m => m.bpm > baseBPM);
-      newBPM = target ? target.bpm : Math.min(180, baseBPM + 5);
+      newBPM = target ? target.bpm : Math.min(MAX_BPM, baseBPM + 5);
     }
     setBaseBPM(newBPM);
     sequencer.setBaseBPM(newBPM);
   };
 
   const handleBarClick = (barIndex: number) => {
-    if (focusedBar === barIndex) {
-      setFocusedBar(null);
-      sequencer.setFocusedBar(null);
-    } else {
-      setFocusedBar(barIndex);
-      sequencer.setFocusedBar(barIndex);
-    }
+    const newFocus = focusedBar === barIndex ? null : barIndex;
+    setFocusedBar(newFocus);
+    sequencer.setFocusedBar(newFocus);
   };
 
   const handleSaveGroove = () => {
-    const groove: GrooveProject = {
-      id: crypto.randomUUID(),
-      name: `Groove ${new Date().toLocaleTimeString()}`,
-      createdAt: new Date().toISOString(),
-      bpm: baseBPM,
-      matrixVibe: grooveType,
-      sequence: sequencer.getSequence(),
-    };
-    saveGroove(groove);
-    addToast('Groove saved to library', 'success');
+    try {
+      const groove: GrooveProject = {
+        id: crypto.randomUUID(),
+        name: `Groove ${new Date().toLocaleTimeString()}`,
+        createdAt: new Date().toISOString(),
+        bpm: baseBPM,
+        matrixVibe: grooveType,
+        sequence: sequencer.getSequence(),
+      };
+      saveGroove(groove);
+      addToast('Groove saved to library', 'success');
+    } catch (err) {
+      console.error(err);
+      addToast('Failed to save groove', 'error');
+    }
   };
 
   const handleLoadGroove = (groove: GrooveProject) => {
@@ -189,21 +192,17 @@ function AppContent() {
     setBaseBPM(groove.bpm);
     sequencer.setBaseBPM(groove.bpm);
     setGrooveType(groove.matrixVibe);
+    setFocusedBar(null);
+    sequencer.setFocusedBar(null);
     addToast(`Loaded "${groove.name}"`, 'success');
-  };
-
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     try {
       const groove = await importGrooveFromFile(file);
       handleLoadGroove(groove);
-      // Reset input
       e.target.value = '';
     } catch (err) {
       console.error(err);
@@ -211,7 +210,6 @@ function AppContent() {
     }
   };
 
-  // Get current tempo mark name
   const currentTempoMark = TEMPO_MARKS.reduce((prev, curr) => {
     return (Math.abs(curr.bpm - baseBPM) < Math.abs(prev.bpm - baseBPM) ? curr : prev);
   });
@@ -224,30 +222,22 @@ function AppContent() {
       
       {/* Header */}
       <header className="absolute top-4 left-0 right-0 z-10 flex items-center justify-center pointer-events-none">
-        <h1 className="text-slate-500 text-[10px] md:text-xs font-mono uppercase tracking-[0.2em] pointer-events-auto">
-          Phase 4: Mandala Sequencer
-        </h1>
-        
-        {/* Metronome Indicator - Top Right */}
         <div className="absolute top-0 right-4 pointer-events-auto flex items-center gap-4">
-           {/* Mandala Toggle */}
            <button 
              onClick={() => setShowMandala(!showMandala)}
              className={`p-2 rounded-full transition-colors ${showMandala ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-600 hover:text-slate-400'}`}
              title={showMandala ? "Hide Sequencer" : "Show Sequencer"}
+             aria-label="Toggle visual sequencer"
            >
              {showMandala ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
            </button>
-
            <div className={`w-3 h-3 md:w-4 md:h-4 rounded-full transition-all duration-75 ${isMetronomeActive ? 'bg-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.9)] scale-110' : 'bg-slate-800 border border-slate-700'}`} />
         </div>
       </header>
 
-      {/* Instrument Stage (Top) */}
+      {/* Instrument Stage */}
       <div className="flex-1 min-h-0 relative flex items-center justify-center p-2 sm:p-4">
           <div className="relative flex items-center justify-center w-full h-full">
-            
-            {/* Physical Handpan - Always Centered */}
             <div className={`transition-all duration-500 ${showMandala ? 'xl:translate-x-[-160px]' : ''} w-full h-full flex items-center justify-center`}>
                <Handpan 
                   isAudioUnlocked={isAudioUnlocked} 
@@ -258,7 +248,6 @@ function AppContent() {
                />
             </div>
 
-            {/* Mandala Sequencer - Conditionally Visible */}
             <AnimatePresence>
               {showMandala && (
                 <motion.div 
@@ -281,149 +270,165 @@ function AppContent() {
           </div>
       </div>
 
-      {/* HUD Panel (Bottom) */}
-      <div className="shrink-0 w-full bg-neutral-900 border-t border-neutral-800 p-4 pb-safe z-20">
-         <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 md:gap-6">
+      {/* PREMIUM HUD PANEL */}
+      <div className="shrink-0 w-full bg-neutral-950/95 backdrop-blur-xl border-t border-white/5 p-5 md:p-6 pb-safe z-20">
+         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-16">
             
-            {/* Left: Transport & Tempo */}
-            <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-start">
-               {/* Play Button */}
+            {/* LEFT BLOCK: Rhythm & Transport */}
+            <div className="flex items-center gap-6">
                <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={handleTogglePlay}
                   disabled={!isAudioUnlocked}
+                  aria-label={isPlaying ? "Pause" : "Play"}
                   className={`
-                    w-14 h-14 rounded-full flex items-center justify-center shadow-lg flex-shrink-0
-                    ${isPlaying ? 'bg-red-500/20 text-red-400 border border-red-500/50' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'}
-                    backdrop-blur-sm transition-colors
+                    w-16 h-16 rounded-full flex items-center justify-center shadow-2xl flex-shrink-0
+                    ${isPlaying ? 'bg-red-500/10 text-red-500 border border-red-500/30' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'}
+                    backdrop-blur-md transition-all
                   `}
                 >
-                  {isPlaying ? <Square className="fill-current w-5 h-5" /> : <Play className="fill-current w-5 h-5 ml-1" />}
+                  {isPlaying ? <Square className="fill-current w-6 h-6" /> : <Play className="fill-current w-6 h-6 ml-1.5" />}
                 </motion.button>
 
-               {/* Musical Tempo Controls */}
-               <div className="flex items-center gap-2 bg-neutral-800/50 rounded-2xl p-2 border border-white/5 flex-1 md:flex-none min-w-[220px]">
-                  <button 
-                    onClick={() => jumpTempo(-1)}
-                    disabled={!isAudioUnlocked}
-                    className="w-10 h-10 flex items-center justify-center rounded-xl bg-neutral-700/50 text-slate-300 hover:bg-neutral-600/50 hover:text-white transition-colors flex-shrink-0"
-                  >
-                    <Minus className="w-5 h-5" />
-                  </button>
-                  
-                  <div className="flex flex-col items-center flex-1 gap-0.5 px-2">
-                     <div className="flex items-baseline gap-1.5">
-                        <span className="text-xl font-bold font-mono text-white leading-none">{Math.round(currentBPM)}</span>
-                        <span className="text-[10px] text-emerald-400 uppercase font-medium tracking-wide truncate max-w-[80px]">{currentTempoMark.name}</span>
+               <div className="flex-1 flex flex-col gap-3">
+                  <div className="flex items-end justify-between">
+                     <div className="flex items-baseline gap-3">
+                        <span className="text-4xl font-light font-mono text-white leading-none tracking-tighter">{Math.round(currentBPM)}</span>
+                        <span className="text-xs text-emerald-400 uppercase font-medium tracking-widest">{currentTempoMark.name}</span>
                      </div>
-                     <input 
-                        type="range" 
-                        min="40" 
-                        max="180" 
-                        step="1" 
-                        value={baseBPM}
-                        onChange={handleBaseBPMChange}
-                        className="w-full h-1 bg-neutral-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:rounded-full"
-                        disabled={!isAudioUnlocked}
-                     />
+                     
+                     {/* Dynamic Tempo Dropdown */}
+                     <div className="relative">
+                        <button 
+                           onClick={() => setIsTempoDropdownOpen(!isTempoDropdownOpen)}
+                           disabled={!isAudioUnlocked}
+                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md hover:bg-white/5 transition-colors text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-white"
+                        >
+                           <Activity className="w-3 h-3 text-emerald-400/70" />
+                           {tempoMode === 'staircase' ? 'Stair' : tempoMode}
+                           <ChevronDown className={`w-3 h-3 transition-transform ${isTempoDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        <AnimatePresence>
+                          {isTempoDropdownOpen && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setIsTempoDropdownOpen(false)} />
+                              <motion.div
+                                initial={{ opacity: 0, y: 5 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 5 }}
+                                className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-white/10 rounded-lg shadow-xl overflow-hidden z-50 p-1 min-w-[120px]"
+                              >
+                                {(['static', 'organic', 'staircase', 'pyramid'] as TempoMode[]).map(mode => (
+                                  <button
+                                    key={mode}
+                                    onClick={() => {
+                                       setTempoMode(mode);
+                                       sequencer.setTempoMode(mode);
+                                       setIsTempoDropdownOpen(false);
+                                    }}
+                                    className={`w-full text-left px-3 py-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                                      tempoMode === mode ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                                    }`}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
+                              </motion.div>
+                            </>
+                          )}
+                        </AnimatePresence>
+                     </div>
                   </div>
 
-                  <button 
-                    onClick={() => jumpTempo(1)}
-                    disabled={!isAudioUnlocked}
-                    className="w-10 h-10 flex items-center justify-center rounded-xl bg-neutral-700/50 text-slate-300 hover:bg-neutral-600/50 hover:text-white transition-colors flex-shrink-0"
-                  >
-                    <Plus className="w-5 h-5" />
-                  </button>
+                  <div className="flex items-center gap-3">
+                     <button onClick={() => jumpTempo(-1)} disabled={!isAudioUnlocked} className="text-slate-500 hover:text-white transition-colors p-1"><Minus className="w-4 h-4" /></button>
+                     <input 
+                        type="range" 
+                        min={MIN_BPM} max={MAX_BPM} step="1" 
+                        value={baseBPM}
+                        onChange={handleBaseBPMChange}
+                        disabled={!isAudioUnlocked}
+                        className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:rounded-full transition-all"
+                     />
+                     <button onClick={() => jumpTempo(1)} disabled={!isAudioUnlocked} className="text-slate-500 hover:text-white transition-colors p-1"><Plus className="w-4 h-4" /></button>
+                  </div>
                </div>
             </div>
 
-            {/* Right: Density & Generator */}
-            <div className="flex flex-col gap-3 w-full md:w-auto flex-1">
+            {/* RIGHT BLOCK: Complexity & Generative Logic */}
+            <div className="flex flex-col justify-center gap-5">
                
-               {/* Density Slider */}
-               <div className="flex flex-col gap-1.5 w-full">
-                  <div className="flex justify-between text-[10px] text-slate-400 font-medium uppercase tracking-wider">
-                     <span>Skeleton</span>
-                     <span>Flow</span>
-                  </div>
-                  <div className="relative h-6 flex items-center">
+               <div className="flex items-center gap-4">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em] w-16">Density</span>
+                  <div className="flex-1 relative h-4 flex items-center">
                      <div className="absolute inset-x-0 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                        <div 
-                           className="h-full bg-emerald-500 transition-all duration-300"
-                           style={{ width: `${((density - 1) / 4) * 100}%` }}
-                        />
+                        <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${((density - 1) / 4) * 100}%` }} />
                      </div>
                      <input 
                         type="range" 
-                        min="1" 
-                        max="5" 
-                        step="1"
+                        min="1" max="5" step="1"
                         value={density}
-                        onChange={(e) => handleDensityChange(parseInt(e.target.value) as DensityLevel)}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        onChange={(e) => handleDensityChange(parseInt(e.target.value))}
                         disabled={!isAudioUnlocked}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                       />
-                     {/* Ticks */}
-                     <div className="absolute inset-x-0 flex justify-between pointer-events-none px-1">
+                     <div className="absolute inset-x-0 flex justify-between pointer-events-none px-0.5">
                         {[1,2,3,4,5].map(i => (
-                           <div key={i} className={`w-1 h-1 rounded-full ${i <= density ? 'bg-white' : 'bg-neutral-600'}`} />
+                           <div key={i} className={`w-1.5 h-1.5 rounded-full ${i <= density ? 'bg-white' : 'bg-neutral-600'}`} />
                         ))}
                      </div>
                   </div>
                </div>
 
-               {/* Secondary Controls Row */}
-               <div className="flex items-center justify-between gap-2">
-                  {/* Style Multi-Select Dropdown */}
+               <div className="flex items-center gap-3">
                   <div className="relative flex-1">
                       <button
                         onClick={() => setIsStyleDropdownOpen(!isStyleDropdownOpen)}
                         disabled={!isAudioUnlocked}
-                        className="w-full flex items-center justify-between px-3 py-2 bg-neutral-800 border border-white/10 rounded-lg text-xs text-slate-300 hover:text-white hover:border-white/20 transition-all"
+                        className="w-full flex items-center justify-between px-4 py-2.5 bg-white/[0.03] hover:bg-white/[0.08] border border-transparent hover:border-white/10 rounded-xl text-xs text-slate-300 transition-all"
                       >
                         <div className="flex items-center gap-2">
-                          <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="font-medium truncate">
+                          <Sparkles className="w-4 h-4 text-emerald-400/80" />
+                          <span className="font-medium tracking-wide">
                             {selectedStyles.length === GENERATOR_STYLES.length 
-                              ? 'All Styles Active' 
-                              : `${selectedStyles.length} Style${selectedStyles.length !== 1 ? 's' : ''} Selected`}
+                              ? 'ALL STYLES' 
+                              : `${selectedStyles.length} STYLE${selectedStyles.length !== 1 ? 'S' : ''}`}
                           </span>
                         </div>
-                        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isStyleDropdownOpen ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${isStyleDropdownOpen ? 'rotate-180' : ''}`} />
                       </button>
 
                       <AnimatePresence>
                         {isStyleDropdownOpen && (
                           <>
-                            <div 
-                              className="fixed inset-0 z-40" 
-                              onClick={() => setIsStyleDropdownOpen(false)} 
-                            />
+                            <div className="fixed inset-0 z-40" onClick={() => setIsStyleDropdownOpen(false)} />
                             <motion.div
-                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              initial={{ opacity: 0, y: 10, scale: 0.98 }}
                               animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                              className="absolute bottom-full left-0 right-0 mb-2 bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl overflow-hidden z-50 p-1 min-w-[200px]"
+                              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                              className="absolute bottom-full left-0 right-0 mb-3 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50 p-1.5 min-w-[200px]"
                             >
-                              {GENERATOR_STYLES.map((style) => {
-                                const isSelected = selectedStyles.includes(style.id);
-                                return (
-                                  <button
-                                    key={style.id}
-                                    onClick={() => toggleStyle(style.id)}
-                                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors ${
-                                      isSelected 
-                                        ? 'bg-emerald-500/10 text-emerald-400' 
-                                        : 'text-slate-400 hover:bg-neutral-800 hover:text-slate-200'
-                                    }`}
-                                  >
-                                    <span>{style.name}</span>
-                                    {isSelected && <Check className="w-3 h-3" />}
-                                  </button>
-                                );
-                              })}
+                              <div className="max-h-[40vh] overflow-y-auto custom-scrollbar">
+                                {GENERATOR_STYLES.map((style) => {
+                                  const isSelected = selectedStyles.includes(style.id);
+                                  return (
+                                    <button
+                                      key={style.id}
+                                      onClick={() => toggleStyle(style.id)}
+                                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
+                                        isSelected 
+                                          ? 'bg-emerald-500/15 text-emerald-400' 
+                                          : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                                      }`}
+                                    >
+                                      <span>{style.name}</span>
+                                      {isSelected && <Check className="w-3.5 h-3.5" />}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </motion.div>
                           </>
                         )}
@@ -431,28 +436,13 @@ function AppContent() {
                    </div>
 
                   <div className="flex gap-2">
-                     <button
-                        onClick={handleGenerateGroove}
-                        disabled={!isAudioUnlocked}
-                        className="p-2 bg-neutral-800 border border-white/10 rounded-lg text-slate-400 hover:text-white transition-colors group"
-                        title="Generate"
-                     >
+                     <button onClick={handleGenerateGroove} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-white transition-all group">
                         <RefreshCw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-500" />
                      </button>
-                     <button
-                        onClick={() => setIsLibraryOpen(true)}
-                        disabled={!isAudioUnlocked}
-                        className="p-2 bg-neutral-800 border border-white/10 rounded-lg text-slate-400 hover:text-white transition-colors"
-                        title="Library"
-                     >
+                     <button onClick={() => setIsLibraryOpen(true)} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-white transition-all">
                         <FolderOpen className="w-4 h-4" />
                      </button>
-                     <button
-                        onClick={handleSaveGroove}
-                        disabled={!isAudioUnlocked}
-                        className="p-2 bg-neutral-800 border border-white/10 rounded-lg text-slate-400 hover:text-emerald-400 transition-colors"
-                        title="Save"
-                     >
+                     <button onClick={handleSaveGroove} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-emerald-400 transition-all">
                         <Save className="w-4 h-4" />
                      </button>
                   </div>
@@ -463,26 +453,9 @@ function AppContent() {
          </div>
       </div>
 
-      {/* Library Modal */}
-      <LibraryModal 
-        isOpen={isLibraryOpen} 
-        onClose={() => setIsLibraryOpen(false)} 
-        onLoad={handleLoadGroove} 
-      />
-
-      {/* Overlay */}
-      {!isAudioUnlocked && (
-        <AudioUnlockOverlay onUnlock={() => setIsAudioUnlocked(true)} />
-      )}
-      
-      {/* Hidden File Input */}
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleFileChange} 
-        className="hidden" 
-        accept=".json"
-      />
+      <LibraryModal isOpen={isLibraryOpen} onClose={() => setIsLibraryOpen(false)} onLoad={handleLoadGroove} />
+      {!isAudioUnlocked && <AudioUnlockOverlay onUnlock={() => setIsAudioUnlocked(true)} />}
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".json" />
     </div>
   );
 }

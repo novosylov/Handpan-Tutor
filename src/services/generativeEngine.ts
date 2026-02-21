@@ -1,210 +1,456 @@
-import { Step, NoteType } from '../types';
+import { Step } from '../types';
 import { HANDPAN_NOTES } from '../constants';
 
-export type PhraseStructure = ('A' | 'B' | 'C' | 'D')[];
+// ==========================================
+// 1. TYPES & CONSTANTS
+// ==========================================
 
-export const GENERATOR_STYLES = [
-  { id: 'standard', name: 'Standard Flow' },
-  { id: 'malte', name: 'Malte Marten' },
-  { id: 'kabecao', name: 'Kabecao' }
-];
+export type PhraseStructure = ('A' | 'B' | 'C' | 'D')[];
+export type StepType = 'empty' | 'accent' | 'ghost' | 'slap';
+export type ModifierType = 'harmonic' | 'choke' | 'none';
+
+// Расширяем локальный интерфейс (в types.ts нужно будет тоже добавить microOffset?: number)
+export interface EngineStep extends Step {
+  microOffset?: number; // Смещение от -0.5 до 0.5 (в долях 16-й ноты)
+}
 
 export interface GeneratorConfig {
   styles: string[];
-  phraseStructure: PhraseStructure; // e.g., ['A', 'A', 'A', 'B']
-  densityBase: number; // 1 to 5
+  phraseStructure: PhraseStructure;
+  densityBase: number;
 }
 
-// D-Kurd Harmonic Relationships (Approximate for generative logic)
-// D3 (Ding) -> D4, A4, D5 (Octaves/Fifths)
-// A3 -> E4, A4 (Fifth/Octave)
-// Bb3 -> F4, Bb4 (Fifth/Octave) - Note: Bb is not in our specific D-Kurd subset but logic holds
-// C4 -> G4, C5
-// D4 -> A4, D5
-// E4 -> A4 (Fourth), B4 (Fifth - if present)
-// F4 -> C5 (Fifth)
-// G4 -> D5 (Fifth)
-// A4 -> D5 (Fourth), E5 (Fifth - if present)
-
-const CONSONANT_PAIRS: Record<string, string[]> = {
-  'ding': ['d4', 'a3', 'a4', 'd5'],
-  'd4': ['a3', 'a4', 'd5', 'g4'],
-  'a3': ['e4', 'a4', 'd4'],
-  'c4': ['g4', 'c5', 'f4'],
-  'e4': ['a3', 'a4', 'g4'], // Avoid F4 (minor second)
-  'f4': ['c4', 'c5', 'bb3'], // Avoid E4
-  'g4': ['c4', 'd4', 'd5'],
-  'a4': ['d4', 'e4', 'd5'],
-  'c5': ['f4', 'g4'],
-  'd5': ['g4', 'a4', 'd4']
+export const CONFIG = {
+  STEPS_PER_BAR: 16,
+  MIN_DENSITY: 1,
+  MAX_DENSITY: 5,
 };
 
-const DISSONANT_PAIRS: Record<string, string[]> = {
-  'e4': ['f4'],
-  'f4': ['e4']
+// ==========================================
+// 2. UTILITIES & SERVICES
+// ==========================================
+
+export const Random = {
+  chance: (probability: number): boolean => Math.random() <= probability,
+  int: (min: number, max: number): number => Math.floor(Math.random() * (max - min + 1)) + min,
+  pick: <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)],
+  float: (min: number, max: number): number => Math.random() * (max - min) + min,
 };
 
-// Smart Note Selector with Physics & Harmonic Filtering
-const getSmartNoteId = (prevNoteId: string | null, type: 'accent' | 'ghost'): string => {
-  const radialNotes = HANDPAN_NOTES.filter(n => n.id !== 'ding').map(n => n.id);
+/**
+ * Music Math Service - Для вычисления настоящих музыкальных интервалов
+ */
+export const MusicMath = {
+  // Конвертация 'D4' -> MIDI Number (D4 = 62)
+  noteToMidi: (noteId: string): number => {
+    if (noteId.toLowerCase() === 'ding') return 50; // Базовый D3 для D-Kurd
+    const notes: Record<string, number> = { 'c': 0, 'c#': 1, 'd': 2, 'd#': 3, 'e': 4, 'f': 5, 'f#': 6, 'g': 7, 'g#': 8, 'a': 9, 'a#': 10, 'b': 11 };
+    const match = noteId.match(/([a-gA-G]#?)(\d)/);
+    if (!match) return 60; // Fallback
+    const [, n, oct] = match;
+    return notes[n.toLowerCase()] + (parseInt(oct) + 1) * 12;
+  },
+  // Поиск ноты по точному сдвигу в полутонах
+  findNoteByInterval: (rootId: string, semitones: number): string | null => {
+    const rootMidi = MusicMath.noteToMidi(rootId);
+    const targetMidi = rootMidi + semitones;
+    const radials = NoteSelector.getRadialNotes();
+    const found = radials.find(n => MusicMath.noteToMidi(n.id) === targetMidi);
+    return found ? found.id : null;
+  }
+};
+
+export const NoteSelector = {
+  getRadialNotes: () => HANDPAN_NOTES.filter(n => n.id !== 'ding'),
   
-  // 1. Anti-Collision Rule (Physics)
-  // If previous note was E4, avoid F4 (Minor Second Clash)
-  const forbiddenNotes = prevNoteId && DISSONANT_PAIRS[prevNoteId] ? DISSONANT_PAIRS[prevNoteId] : [];
+  getRandomRadial: (): string => Random.pick(NoteSelector.getRadialNotes()).id,
 
-  // 2. Consonance Bias (Harmonics)
-  // 40% chance to pick a harmonically related note
-  if (prevNoteId && Math.random() < 0.4) {
-    const consonantOptions = CONSONANT_PAIRS[prevNoteId];
-    if (consonantOptions) {
-      // Filter out forbidden notes and ensure options exist in our scale
-      const validConsonants = consonantOptions.filter(id => radialNotes.includes(id) && !forbiddenNotes.includes(id));
-      if (validConsonants.length > 0) {
-        return validConsonants[Math.floor(Math.random() * validConsonants.length)];
-      }
-    }
-  }
-
-  // 3. Random Fallback (with filtering)
-  const validOptions = radialNotes.filter(id => !forbiddenNotes.includes(id));
-  return validOptions[Math.floor(Math.random() * validOptions.length)];
-};
-
-// Helper to determine articulation modifier
-const getModifier = (type: NoteType): 'harmonic' | 'choke' | 'none' => {
-  if (type === 'accent') {
-    // 10% chance for Harmonic (Crystal Ping)
-    return Math.random() < 0.1 ? 'harmonic' : 'none';
-  } else if (type === 'ghost') {
-    // 15% chance for Choke (Muted Click)
-    return Math.random() < 0.15 ? 'choke' : 'none';
-  }
-  return 'none';
-};
-
-// Generate a single 16-step bar based on style and density
-const generateBar = (style: string, density: number): Step[] => {
-  // Initialize empty bar
-  const bar: Step[] = Array(16).fill(null).map(() => ({ noteId: null, type: 'empty', modifier: 'none' }));
-  let lastNoteId: string | null = null;
-
-  // 1. Absolute Anchors (Density 1+)
-  // Ding on the 1 (Step 0)
-  bar[0] = { noteId: 'ding', type: 'accent', modifier: 'none' };
-  lastNoteId = 'ding';
-  
-  // Anchor on the 3 (Step 8) - usually a strong radial note
-  if (density >= 1) {
-    const noteId = getSmartNoteId(lastNoteId, 'accent');
-    bar[8] = { noteId, type: 'accent', modifier: getModifier('accent') };
-    lastNoteId = noteId;
-  }
-
-  // 2. Backbeats / Slaps (Density 2+)
-  if (density >= 2) {
-    // Standard backbeat on 2 and 4 (Steps 4 and 12)
-    bar[4] = { noteId: null, type: 'slap', modifier: 'none' };
-    bar[12] = { noteId: null, type: 'slap', modifier: 'none' };
-  }
-
-  // 3. 8th Note Flow (Density 3+)
-  if (density >= 3) {
-    // Fill 2, 6, 10, 14 with Ghosts
-    [2, 6, 10, 14].forEach(stepIdx => {
-      // 50% chance to play a ghost note
-      if (Math.random() > 0.3) {
-        const noteId = getSmartNoteId(lastNoteId, 'ghost');
-        bar[stepIdx] = { noteId, type: 'ghost', modifier: getModifier('ghost') };
-        lastNoteId = noteId;
-      }
-    });
-  }
-
-  // 4. 16th Note Syncopation (Density 4+)
-  if (density >= 4) {
-    // Fill odd steps (1, 3, 5...)
-    [1, 3, 5, 7, 9, 11, 13, 15].forEach(stepIdx => {
-      if (Math.random() > 0.6) {
-        const noteId = getSmartNoteId(lastNoteId, 'ghost');
-        bar[stepIdx] = { noteId, type: 'ghost', modifier: getModifier('ghost') };
-        lastNoteId = noteId; // Update last note for flow
-      }
-    });
-  }
-
-  // 5. Full Density / Melodic Embellishment (Density 5)
-  if (density >= 5) {
-    // Upgrade some ghosts to accents
-    bar.forEach((step, idx) => {
-      if (step.type === 'ghost' && Math.random() > 0.5) {
-        bar[idx] = { ...step, type: 'accent', modifier: getModifier('accent') };
-      }
-    });
-  }
-
-  return bar;
-};
-
-// Mutate an existing bar to create variation
-const mutateBar = (originalBar: Step[]): Step[] => {
-  const newBar = [...originalBar]; // Shallow copy of array
-  
-  // Pick 1-2 random steps to mutate (avoiding step 0 - The One)
-  const mutationsCount = Math.floor(Math.random() * 2) + 1;
-
-  for (let i = 0; i < mutationsCount; i++) {
-    const stepIdx = Math.floor(Math.random() * 15) + 1; // 1 to 15
-    const currentStep = newBar[stepIdx];
+  // Умный поиск: избегаем малых секунд (1 полутон)
+  getSmartRadial: (prevNoteId: string | null): string => {
+    const radials = NoteSelector.getRadialNotes();
+    if (!prevNoteId || prevNoteId === 'ding') return Random.pick(radials).id;
     
-    // Find previous note for context (simple lookback)
-    let prevNoteId = null;
-    for (let j = stepIdx - 1; j >= 0; j--) {
-      if (newBar[j].noteId) {
-        prevNoteId = newBar[j].noteId;
-        break;
-      }
-    }
+    const prevMidi = MusicMath.noteToMidi(prevNoteId);
+    // Исключаем ноты, которые образуют диссонанс в 1 полутон (малая секунда)
+    const consonantNotes = radials.filter(n => Math.abs(MusicMath.noteToMidi(n.id) - prevMidi) !== 1);
+    return consonantNotes.length > 0 ? Random.pick(consonantNotes).id : Random.pick(radials).id;
+  },
 
-    if (currentStep.type === 'empty') {
-      // Add a ghost note
-      const noteId = getSmartNoteId(prevNoteId, 'ghost');
-      newBar[stepIdx] = { noteId, type: 'ghost', modifier: getModifier('ghost') };
-    } else if (currentStep.type === 'ghost') {
-      // Remove or Accent
-      if (Math.random() > 0.5) {
-        newBar[stepIdx] = { noteId: null, type: 'empty', modifier: 'none' };
-      } else {
-        newBar[stepIdx] = { ...currentStep, type: 'accent', modifier: getModifier('accent') };
-      }
-    } else if (currentStep.type === 'accent') {
-      // Demote to ghost
-      newBar[stepIdx] = { ...currentStep, type: 'ghost', modifier: getModifier('ghost') };
-    }
-    // Leave slaps alone mostly
+  // Идеальные прыжки: Квинта (+7) или Октава (+12)
+  getJumpPair: (): [string, string] => {
+    const radials = NoteSelector.getRadialNotes();
+    const root = Random.pick(radials).id;
+    // Ищем квинту (+7) или октаву (+12), если нет - кварту (+5)
+    const target = MusicMath.findNoteByInterval(root, 7) 
+                || MusicMath.findNoteByInterval(root, 12) 
+                || MusicMath.findNoteByInterval(root, 5) 
+                || Random.pick(radials).id; // Fallback
+    return [root, target];
   }
-
-  return newBar;
 };
 
-export const generateSequence = (config: GeneratorConfig): Step[] => {
-  const { styles, phraseStructure, densityBase } = config;
-  const barMemory: Record<string, Step[]> = {};
-  let fullSequence: Step[] = [];
+export const BarUtils = {
+  createEmpty: (size: number = CONFIG.STEPS_PER_BAR): EngineStep[] => 
+    Array(size).fill(null).map(() => ({ noteId: null, type: 'empty', microOffset: 0 })),
 
-  phraseStructure.forEach((letter) => {
-    // Pick a random style for this bar from the selected styles
-    const randomStyle = styles.length > 0 
-      ? styles[Math.floor(Math.random() * styles.length)] 
-      : 'standard';
+  setStep: (bar: EngineStep[], idx: number, type: StepType, noteId: string | null = null, modifier: ModifierType = 'none', microOffset: number = 0) => {
+    if (idx >= 0 && idx < bar.length) bar[idx] = { type, noteId, modifier, microOffset };
+  },
+
+  setAccent: (bar: EngineStep[], idx: number, noteId: string, offset = 0) => BarUtils.setStep(bar, idx, 'accent', noteId, 'none', offset),
+  setGhost: (bar: EngineStep[], idx: number, noteId: string | null, modifier: ModifierType = 'none', offset = 0) => BarUtils.setStep(bar, idx, 'ghost', noteId, modifier, offset),
+  setSlap: (bar: EngineStep[], idx: number, offset = 0) => BarUtils.setStep(bar, idx, 'slap', null, 'none', offset)
+};
+
+// ==========================================
+// 3. STRATEGY PATTERN (STYLE REGISTRY)
+// ==========================================
+
+export interface IStyleStrategy {
+  id: string;
+  name: string;
+  category: 'artist' | 'educational';
+  probabilities: { harmonicOnAccent: number; chokeOnGhost: number; };
+  generate: (density: number) => EngineStep[];
+  mutate: (bar: EngineStep[], density: number) => EngineStep[];
+}
+
+abstract class BaseStyle implements IStyleStrategy {
+  abstract id: string;
+  abstract name: string;
+  abstract category: 'artist' | 'educational';
+  probabilities = { harmonicOnAccent: 0.1, chokeOnGhost: 0.15 };
+
+  abstract generate(density: number): EngineStep[];
+
+  protected getModifier(type: 'accent' | 'ghost'): ModifierType {
+    if (type === 'accent' && Random.chance(this.probabilities.harmonicOnAccent)) return 'harmonic';
+    if (type === 'ghost' && Random.chance(this.probabilities.chokeOnGhost)) return 'choke';
+    return 'none';
+  }
+
+  mutate(bar: EngineStep[], density: number): EngineStep[] {
+    const newBar = [...bar];
+    const mutationsCount = Random.int(1, 2);
+    
+    for (let i = 0; i < mutationsCount; i++) {
+      const stepIdx = Random.int(1, CONFIG.STEPS_PER_BAR - 1); 
+      const current = newBar[stepIdx];
+      const prevNote = newBar[stepIdx - 1]?.noteId || null;
+
+      if (current.type === 'empty' && density >= 3) {
+        BarUtils.setGhost(newBar, stepIdx, NoteSelector.getSmartRadial(prevNote), this.getModifier('ghost'));
+      } else if (current.type === 'ghost') {
+        Random.chance(0.5) 
+          ? BarUtils.setStep(newBar, stepIdx, 'empty')
+          : BarUtils.setStep(newBar, stepIdx, 'accent', current.noteId || NoteSelector.getSmartRadial(null), this.getModifier('accent'));
+      } else if (current.type === 'accent') {
+        BarUtils.setGhost(newBar, stepIdx, current.noteId, this.getModifier('ghost'));
+      }
+    }
+    return newBar;
+  }
+}
+
+// --- ARTIST STRATEGIES ---
+
+class StandardStyle extends BaseStyle {
+  id = 'standard'; name = 'Standard Flow'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding');
+    if (density >= 1) BarUtils.setAccent(bar, 8, NoteSelector.getSmartRadial('ding'));
+    if (density >= 2) { BarUtils.setSlap(bar, 4); BarUtils.setSlap(bar, 12); }
+    if (density >= 3) {
+      [2, 6, 10, 14].forEach(i => {
+        if (Random.chance(0.5)) BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null), this.getModifier('ghost'));
+      });
+    }
+    return bar;
+  }
+}
+
+class HangMassiveStyle extends BaseStyle {
+  id = 'hang_massive'; name = 'Hang Massive (Trance)'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding'); BarUtils.setAccent(bar, 8, 'ding');
+    if (density >= 2) { BarUtils.setAccent(bar, 4, NoteSelector.getSmartRadial('ding')); BarUtils.setAccent(bar, 12, NoteSelector.getSmartRadial('ding')); }
+    if (density >= 3) { [2, 6, 10, 14].forEach(i => BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null))); }
+    return bar;
+  }
+}
+
+class MalteStyle extends BaseStyle {
+  id = 'malte'; name = 'Malte Marten (Tresillo)'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    const anchor2 = NoteSelector.getSmartRadial('ding');
+    BarUtils.setAccent(bar, 0, 'ding');
+    BarUtils.setAccent(bar, 3, anchor2);
+    BarUtils.setAccent(bar, 6, NoteSelector.getSmartRadial(anchor2));
+    if (density >= 2) BarUtils.setSlap(bar, 12);
+    if (density >= 3) { [2, 5, 8, 10, 14].forEach(i => BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null))); }
+    return bar;
+  }
+}
+
+class KabecaoStyle extends BaseStyle {
+  id = 'kabecao'; name = 'Kabeção (Ping-Pong Ghosts)'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding');
+    BarUtils.setAccent(bar, 7, NoteSelector.getSmartRadial('ding'));
+    BarUtils.setSlap(bar, 4); BarUtils.setSlap(bar, 12);
+    if (density >= 3) {
+      for (let i = 0; i < CONFIG.STEPS_PER_BAR; i++) {
+        if (bar[i].type === 'empty' && Random.chance(0.8)) {
+          BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null), this.getModifier('ghost'));
+        }
+      }
+    }
+    return bar;
+  }
+}
+
+class WaplesStyle extends BaseStyle {
+  id = 'waples'; name = 'Daniel Waples (100% Density)'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = new StandardStyle().generate(density);
+    if (density >= 2) {
+      let prev = 'ding';
+      bar.forEach((step, i) => {
+        if (step.type === 'empty') {
+          const id = NoteSelector.getSmartRadial(prev);
+          BarUtils.setGhost(bar, i, id, this.getModifier('ghost'));
+          prev = id;
+        }
+      });
+    }
+    return bar;
+  }
+}
+
+class YukiStyle extends BaseStyle {
+  id = 'yuki'; name = 'Yuki Koshimoto (Sparsity)'; category = 'artist' as const;
+  probabilities = { harmonicOnAccent: 0.6, chokeOnGhost: 0.0 };
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding');
+    BarUtils.setStep(bar, 6, 'accent', NoteSelector.getSmartRadial('ding'), this.getModifier('accent'));
+    if (density >= 3) BarUtils.setAccent(bar, 14, NoteSelector.getSmartRadial('ding'));
+    return bar;
+  }
+  mutate(bar: EngineStep[], density: number): EngineStep[] {
+    const newBar = [...bar];
+    const stepIdx = Random.int(1, CONFIG.STEPS_PER_BAR - 1);
+    if (newBar[stepIdx].type === 'accent') newBar[stepIdx].modifier = 'harmonic';
+    return newBar;
+  }
+}
+
+class ManuStyle extends BaseStyle {
+  id = 'manu'; name = 'Manu Delago (Odd Groupings)'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding');
+    BarUtils.setAccent(bar, 7, NoteSelector.getSmartRadial('ding'));
+    BarUtils.setSlap(bar, 14);
+    if (density >= 3) { [2, 4, 9, 11].forEach(i => BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null))); }
+    return bar;
+  }
+}
+
+class KuckhermannStyle extends BaseStyle {
+  id = 'kuckhermann'; name = 'David Kuckhermann (Rolls)'; category = 'artist' as const;
+  generate(density: number) {
+    const bar = new StandardStyle().generate(density);
+    if (density >= 4) {
+      [13, 14, 15].forEach(i => {
+        i === 15 ? BarUtils.setAccent(bar, i, NoteSelector.getSmartRadial(null)) : BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null));
+      });
+    }
+    return bar;
+  }
+}
+
+class NadishanaStyle extends BaseStyle {
+  id = 'nadishana'; name = 'Nadishana (Choke Heavy)'; category = 'artist' as const;
+  probabilities = { harmonicOnAccent: 0.1, chokeOnGhost: 0.8 };
+  generate(density: number) {
+    const bar = new StandardStyle().generate(density);
+    bar.forEach((step, i) => {
+      if (step.type === 'ghost') bar[i].modifier = this.getModifier('ghost');
+    });
+    return bar;
+  }
+}
+
+// --- EDUCATIONAL STRATEGIES ---
+
+class ParadiddleStyle extends BaseStyle {
+  id = 'edu_paradiddle'; name = '[EDU] Paradiddle Flow'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    const pattern: StepType[] = ['accent', 'ghost', 'accent', 'accent', 'ghost', 'accent', 'ghost', 'ghost'];
+    for (let i = 0; i < CONFIG.STEPS_PER_BAR; i++) {
+      const pType = pattern[i % 8];
+      if (density < 3 && pType === 'ghost') continue; 
+      if (density < 2 && i % 4 !== 0) continue;
+      
+      if (pType === 'accent') BarUtils.setAccent(bar, i, i === 0 || i === 8 ? 'ding' : NoteSelector.getSmartRadial(null));
+      else BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null));
+    }
+    return bar;
+  }
+}
+
+class GamelanStyle extends BaseStyle {
+  id = 'edu_gamelan'; name = '[EDU] Gamelan Interlock'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    [0, 4, 8, 12].forEach(i => BarUtils.setAccent(bar, i, 'ding'));
+    if (density >= 2) {
+      [2, 3, 6, 9, 14].forEach(i => BarUtils.setAccent(bar, i, NoteSelector.getSmartRadial('ding')));
+    }
+    return bar;
+  }
+}
+
+class CascadeStyle extends BaseStyle {
+  id = 'edu_cascade'; name = '[EDU] Cascade Arpeggios'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    const radials = NoteSelector.getRadialNotes();
+    const isAscending = Random.chance(0.5);
+    let noteIdx = isAscending ? 0 : radials.length - 1;
+
+    for (let i = 0; i < CONFIG.STEPS_PER_BAR; i += 2) { 
+      if (density < 3 && i % 4 !== 0) continue;
+      BarUtils.setAccent(bar, i, radials[noteIdx].id);
+      noteIdx = isAscending ? (noteIdx + 1) % radials.length : (noteIdx - 1 + radials.length) % radials.length;
+    }
+    if (density >= 4) { [3, 7, 11, 15].forEach(i => BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null))); }
+    return bar;
+  }
+}
+
+class JumpsStyle extends BaseStyle {
+  id = 'edu_jumps'; name = '[EDU] Consonance Jumps'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    const [root, jump] = NoteSelector.getJumpPair();
+    
+    BarUtils.setAccent(bar, 0, 'ding');
+    BarUtils.setAccent(bar, 2, root);
+    BarUtils.setAccent(bar, 4, jump); 
+    
+    if (density >= 2) {
+      BarUtils.setAccent(bar, 8, 'ding');
+      BarUtils.setAccent(bar, 10, jump);
+      BarUtils.setAccent(bar, 12, root); 
+    }
+    return bar;
+  }
+}
+
+class LiquidDnBStyle extends BaseStyle {
+  id = 'edu_dnb'; name = '[EDU] Liquid DnB (Lazy Snares)'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding'); BarUtils.setAccent(bar, 10, 'ding');
+    // Lazy snares! Смещение +0.15 (слэп бьет чуть позже сетки, создавая кач)
+    BarUtils.setSlap(bar, 4, 0.15); BarUtils.setSlap(bar, 12, 0.15);
+    if (density >= 3) {
+      [2, 6, 8, 14, 15].forEach(i => BarUtils.setGhost(bar, i, NoteSelector.getSmartRadial(null)));
+    }
+    return bar;
+  }
+}
+
+class ClaveStyle extends BaseStyle {
+  id = 'edu_clave'; name = '[EDU] Afro-Cuban Clave'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    [0, 3, 6, 10, 12].forEach(i => BarUtils.setAccent(bar, i, NoteSelector.getSmartRadial(null)));
+    if (density >= 3) {
+      bar.forEach((step, i) => {
+        if (step.type === 'empty' && Random.chance(0.5)) BarUtils.setGhost(bar, i, null);
+      });
+    }
+    return bar;
+  }
+}
+
+class BossaStyle extends BaseStyle {
+  id = 'edu_bossa'; name = '[EDU] Bossa Nova Pulse (Shuffle)'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    [0, 4, 8, 12].forEach(i => BarUtils.setAccent(bar, i, 'ding'));
+    // Bossa chords with slight shuffle (+0.05 on weak beats)
+    [0, 3, 7, 10, 14].forEach(i => {
+      const offset = (i % 2 !== 0) ? 0.05 : 0; 
+      BarUtils.setAccent(bar, i, NoteSelector.getSmartRadial('ding'), offset);
+    });
+    return bar;
+  }
+}
+
+class MaqamStyle extends BaseStyle {
+  id = 'edu_maqam'; name = '[EDU] Doumbek Articulation'; category = 'educational' as const;
+  generate(density: number) {
+    const bar = BarUtils.createEmpty();
+    BarUtils.setAccent(bar, 0, 'ding');
+    BarUtils.setAccent(bar, 2, NoteSelector.getSmartRadial(null));
+    BarUtils.setAccent(bar, 6, NoteSelector.getSmartRadial(null));
+    BarUtils.setAccent(bar, 8, 'ding');
+    BarUtils.setAccent(bar, 10, NoteSelector.getSmartRadial(null));
+    
+    if (density >= 3) { [4, 12, 14].forEach(i => BarUtils.setSlap(bar, i)); }
+    return bar;
+  }
+}
+
+// ==========================================
+// 4. REGISTRY INITIALIZATION & EXPORTS
+// ==========================================
+
+const REGISTRY = new Map<string, IStyleStrategy>();
+[
+  new StandardStyle(), new HangMassiveStyle(), new MalteStyle(), new KabecaoStyle(), 
+  new WaplesStyle(), new YukiStyle(), new ManuStyle(), new KuckhermannStyle(), new NadishanaStyle(),
+  new ParadiddleStyle(), new GamelanStyle(), new CascadeStyle(), new JumpsStyle(), 
+  new LiquidDnBStyle(), new ClaveStyle(), new BossaStyle(), new MaqamStyle()
+].forEach(strategy => REGISTRY.set(strategy.id, strategy));
+
+export const GENERATOR_STYLES = Array.from(REGISTRY.values()).map(s => ({
+  id: s.id,
+  name: s.name
+}));
+
+// ==========================================
+// 5. MAIN ENGINE ENTRY POINT
+// ==========================================
+
+export const generateSequence = (config: GeneratorConfig): EngineStep[] => {
+  const density = Math.max(CONFIG.MIN_DENSITY, Math.min(CONFIG.MAX_DENSITY, config.densityBase || 3));
+  if (!config.phraseStructure || config.phraseStructure.length === 0) {
+    throw new Error('phraseStructure cannot be empty');
+  }
+  const validStyles = config.styles?.length > 0 ? config.styles : ['standard'];
+
+  const barMemory: Record<string, EngineStep[]> = {};
+  let fullSequence: EngineStep[] = [];
+
+  config.phraseStructure.forEach((letter) => {
+    const selectedStyleId = Random.pick(validStyles);
+    const strategy = REGISTRY.get(selectedStyleId) || REGISTRY.get('standard')!;
 
     if (!barMemory[letter]) {
-      // Generate new bar
-      barMemory[letter] = generateBar(randomStyle, densityBase);
+      barMemory[letter] = strategy.generate(density);
       fullSequence = [...fullSequence, ...barMemory[letter]];
     } else {
-      // Retrieve and Mutate
-      const original = barMemory[letter];
-      const mutated = mutateBar(original);
+      const mutated = strategy.mutate(barMemory[letter], density);
       fullSequence = [...fullSequence, ...mutated];
     }
   });
