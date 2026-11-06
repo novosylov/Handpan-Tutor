@@ -5,17 +5,15 @@ import { AudioUnlockOverlay } from './components/AudioUnlockOverlay';
 import { LibraryModal } from './components/LibraryModal';
 import { MandalaSequencer } from './components/MandalaSequencer';
 import { sequencer } from './services/sequencer';
-import { generateGroove } from './services/grooveGenerator';
 import { generateSequence, PhraseStructure, GENERATOR_STYLES } from './services/generativeEngine';
 import { saveGroove, importGrooveFromFile } from './services/storageService';
-import { DensityLevel, GrooveType, TempoMode, GrooveProject, Step } from './types';
-import { Play, Square, RefreshCw, Save, FolderOpen, Eye, EyeOff, Minus, Plus, Sparkles, ChevronDown, Check, Activity } from 'lucide-react';
+import { DensityLevel, TempoMode, GrooveProject, Step } from './types';
+import { Play, Square, RefreshCw, Save, FolderOpen, Eye, EyeOff, Minus, Plus, Sparkles, ChevronDown, Check, Activity, ListOrdered } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- CONSTANTS ---
 const MIN_BPM = 40;
 const MAX_BPM = 180;
-const DEFAULT_PHRASE: PhraseStructure = ['A', 'A', 'A', 'B'];
 
 const TEMPO_MARKS = [
   {name: 'Grave', bpm: 40},
@@ -30,6 +28,14 @@ const TEMPO_MARKS = [
   {name: 'Presto', bpm: 168}
 ];
 
+const getPhraseStructure = (bars: number): PhraseStructure => {
+  if (bars === 1) return ['A'];
+  if (bars === 2) return ['A', 'B'];
+  if (bars === 4) return ['A', 'A', 'A', 'B'];
+  if (bars === 8) return ['A', 'A', 'A', 'B', 'C', 'C', 'C', 'D'];
+  return Array.from({ length: bars }, (_, i) => String.fromCharCode(65 + (i % 4))) as PhraseStructure;
+};
+
 function AppContent() {
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -37,8 +43,10 @@ function AppContent() {
   const [showMandala, setShowMandala] = useState(false);
   
   const [density, setDensity] = useState<DensityLevel>(3);
-  const [grooveType, setGrooveType] = useState<GrooveType>('straight');
   const [tempoMode, setTempoMode] = useState<TempoMode>('static');
+  
+  const [barsCount, setBarsCount] = useState<number>(4);
+  const [isBarsDropdownOpen, setIsBarsDropdownOpen] = useState(false);
   
   const [selectedStyles, setSelectedStyles] = useState<string[]>(GENERATOR_STYLES.map(s => s.id));
   const [isStyleDropdownOpen, setIsStyleDropdownOpen] = useState(false);
@@ -73,7 +81,11 @@ function AppContent() {
       setTimeout(() => setIsMetronomeActive(false), 100);
     });
 
-    const initialGroove = generateGroove('straight');
+    const initialGroove = generateSequence({
+      styles: ['standard'],
+      phraseStructure: ['A', 'A', 'A', 'B'],
+      densityBase: 3
+    });
     sequencer.setSequence(initialGroove);
     setSequence(initialGroove);
 
@@ -103,23 +115,19 @@ function AppContent() {
 
   const handleGenerateGroove = () => {
     try {
-      let newGroove: Step[] = [];
-      if (selectedStyles.length === 1 && selectedStyles[0] === 'standard') {
-        newGroove = generateGroove(grooveType, density);
-      } else {
-        newGroove = generateSequence({
-          styles: selectedStyles,
-          phraseStructure: DEFAULT_PHRASE,
-          densityBase: density
-        });
-      }
+      const newGroove = generateSequence({
+        styles: selectedStyles.length > 0 ? selectedStyles : ['standard'],
+        phraseStructure: getPhraseStructure(barsCount),
+        densityBase: density
+      });
+
       setFocusedBar(null);
       sequencer.setFocusedBar(null);
       
       sequencer.setSequence(newGroove);
       setSequence(newGroove);
       setCurrentStep(0);
-      addToast('Generated new groove', 'success');
+      addToast(`Generated ${barsCount}-bar groove`, 'success');
     } catch (err) {
       console.error(err);
       addToast('Failed to generate groove', 'error');
@@ -175,7 +183,7 @@ function AppContent() {
         name: `Groove ${new Date().toLocaleTimeString()}`,
         createdAt: new Date().toISOString(),
         bpm: baseBPM,
-        matrixVibe: grooveType,
+        matrixVibe: 'straight', 
         sequence: sequencer.getSequence(),
       };
       saveGroove(groove);
@@ -191,7 +199,6 @@ function AppContent() {
     setSequence(groove.sequence);
     setBaseBPM(groove.bpm);
     sequencer.setBaseBPM(groove.bpm);
-    setGrooveType(groove.matrixVibe);
     setFocusedBar(null);
     sequencer.setFocusedBar(null);
     addToast(`Loaded "${groove.name}"`, 'success');
@@ -202,6 +209,7 @@ function AppContent() {
     if (!file) return;
     try {
       const groove = await importGrooveFromFile(file);
+      groove.id = crypto.randomUUID();
       handleLoadGroove(groove);
       e.target.value = '';
     } catch (err) {
@@ -216,11 +224,8 @@ function AppContent() {
 
   return (
     <div className="flex flex-col h-[100dvh] w-full overflow-hidden bg-neutral-950 text-white font-sans selection:bg-emerald-500/30">
-      
-      {/* Background Ambience */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 -z-10 pointer-events-none" />
       
-      {/* Header */}
       <header className="absolute top-4 left-0 right-0 z-10 flex items-center justify-center pointer-events-none">
         <div className="absolute top-0 right-4 pointer-events-auto flex items-center gap-4">
            <button 
@@ -235,7 +240,6 @@ function AppContent() {
         </div>
       </header>
 
-      {/* Instrument Stage */}
       <div className="flex-1 min-h-0 relative flex items-center justify-center p-2 sm:p-4">
           <div className="relative flex items-center justify-center w-full h-full">
             <div className={`transition-all duration-500 ${showMandala ? 'xl:translate-x-[-160px]' : ''} w-full h-full flex items-center justify-center`}>
@@ -245,12 +249,14 @@ function AppContent() {
                   currentStep={currentStep}
                   focusedBar={focusedBar}
                   onBarClick={handleBarClick}
+                  sequence={sequence}
                />
             </div>
 
             <AnimatePresence>
               {showMandala && (
                 <motion.div 
+                  key="mandala-sequencer"
                   initial={{ opacity: 0, scale: 0.8, x: 0 }}
                   animate={{ opacity: 1, scale: 1, x: 0 }}
                   exit={{ opacity: 0, scale: 0.8, x: 0 }}
@@ -270,18 +276,15 @@ function AppContent() {
           </div>
       </div>
 
-      {/* PREMIUM HUD PANEL */}
-      <div className="shrink-0 w-full bg-neutral-950/95 backdrop-blur-xl border-t border-white/5 p-5 md:p-6 pb-safe z-20">
-         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-16">
+      <div className="relative shrink-0 w-full bg-neutral-950/95 backdrop-blur-xl border-t border-white/5 pb-safe z-20">
+         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-16 p-5 md:p-6 pt-6 md:pt-7">
             
-            {/* LEFT BLOCK: Rhythm & Transport */}
             <div className="flex items-center gap-6">
                <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={handleTogglePlay}
                   disabled={!isAudioUnlocked}
-                  aria-label={isPlaying ? "Pause" : "Play"}
                   className={`
                     w-16 h-16 rounded-full flex items-center justify-center shadow-2xl flex-shrink-0
                     ${isPlaying ? 'bg-red-500/10 text-red-500 border border-red-500/30' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'}
@@ -298,7 +301,6 @@ function AppContent() {
                         <span className="text-xs text-emerald-400 uppercase font-medium tracking-widest">{currentTempoMark.name}</span>
                      </div>
                      
-                     {/* Dynamic Tempo Dropdown */}
                      <div className="relative">
                         <button 
                            onClick={() => setIsTempoDropdownOpen(!isTempoDropdownOpen)}
@@ -310,33 +312,34 @@ function AppContent() {
                            <ChevronDown className={`w-3 h-3 transition-transform ${isTempoDropdownOpen ? 'rotate-180' : ''}`} />
                         </button>
 
+                        {isTempoDropdownOpen && (
+                          <div className="fixed inset-0 z-40" onClick={() => setIsTempoDropdownOpen(false)} />
+                        )}
                         <AnimatePresence>
                           {isTempoDropdownOpen && (
-                            <>
-                              <div className="fixed inset-0 z-40" onClick={() => setIsTempoDropdownOpen(false)} />
-                              <motion.div
-                                initial={{ opacity: 0, y: 5 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 5 }}
-                                className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-white/10 rounded-lg shadow-xl overflow-hidden z-50 p-1 min-w-[120px]"
-                              >
-                                {(['static', 'organic', 'staircase', 'pyramid'] as TempoMode[]).map(mode => (
-                                  <button
-                                    key={mode}
-                                    onClick={() => {
-                                       setTempoMode(mode);
-                                       sequencer.setTempoMode(mode);
-                                       setIsTempoDropdownOpen(false);
-                                    }}
-                                    className={`w-full text-left px-3 py-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors ${
-                                      tempoMode === mode ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                                    }`}
-                                  >
-                                    {mode}
-                                  </button>
-                                ))}
-                              </motion.div>
-                            </>
+                            <motion.div
+                              key="tempo-dropdown-menu"
+                              initial={{ opacity: 0, y: 5 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 5 }}
+                              className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-white/10 rounded-lg shadow-xl overflow-hidden z-50 p-1 min-w-[120px]"
+                            >
+                              {(['static', 'organic', 'staircase', 'pyramid'] as TempoMode[]).map(mode => (
+                                <button
+                                  key={`tempo-mode-${mode}`}
+                                  onClick={() => {
+                                     setTempoMode(mode);
+                                     sequencer.setTempoMode(mode);
+                                     setIsTempoDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                                    tempoMode === mode ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                                  }`}
+                                >
+                                  {mode}
+                                </button>
+                              ))}
+                            </motion.div>
                           )}
                         </AnimatePresence>
                      </div>
@@ -357,7 +360,6 @@ function AppContent() {
                </div>
             </div>
 
-            {/* RIGHT BLOCK: Complexity & Generative Logic */}
             <div className="flex flex-col justify-center gap-5">
                
                <div className="flex items-center gap-4">
@@ -376,7 +378,7 @@ function AppContent() {
                       />
                      <div className="absolute inset-x-0 flex justify-between pointer-events-none px-0.5">
                         {[1,2,3,4,5].map(i => (
-                           <div key={i} className={`w-1.5 h-1.5 rounded-full ${i <= density ? 'bg-white' : 'bg-neutral-600'}`} />
+                           <div key={`density-dot-${i}`} className={`w-1.5 h-1.5 rounded-full ${i <= density ? 'bg-white' : 'bg-neutral-600'}`} />
                         ))}
                      </div>
                   </div>
@@ -400,49 +402,93 @@ function AppContent() {
                         <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${isStyleDropdownOpen ? 'rotate-180' : ''}`} />
                       </button>
 
+                      {isStyleDropdownOpen && (
+                        <div className="fixed inset-0 z-40" onClick={() => setIsStyleDropdownOpen(false)} />
+                      )}
                       <AnimatePresence>
                         {isStyleDropdownOpen && (
-                          <>
-                            <div className="fixed inset-0 z-40" onClick={() => setIsStyleDropdownOpen(false)} />
-                            <motion.div
-                              initial={{ opacity: 0, y: 10, scale: 0.98 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                              className="absolute bottom-full left-0 right-0 mb-3 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50 p-1.5 min-w-[200px]"
-                            >
-                              <div className="max-h-[40vh] overflow-y-auto custom-scrollbar">
-                                {GENERATOR_STYLES.map((style) => {
-                                  const isSelected = selectedStyles.includes(style.id);
-                                  return (
-                                    <button
-                                      key={style.id}
-                                      onClick={() => toggleStyle(style.id)}
-                                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                                        isSelected 
-                                          ? 'bg-emerald-500/15 text-emerald-400' 
-                                          : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
-                                      }`}
-                                    >
-                                      <span>{style.name}</span>
-                                      {isSelected && <Check className="w-3.5 h-3.5" />}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </motion.div>
-                          </>
+                          <motion.div
+                            key="style-dropdown-menu"
+                            initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                            className="absolute bottom-full left-0 right-0 mb-3 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50 p-1.5 min-w-[200px]"
+                          >
+                            <div className="max-h-[40vh] overflow-y-auto custom-scrollbar">
+                              {GENERATOR_STYLES.map((style) => {
+                                const isSelected = selectedStyles.includes(style.id);
+                                return (
+                                  <button
+                                    key={`style-item-${style.id}`}
+                                    onClick={() => toggleStyle(style.id)}
+                                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
+                                      isSelected 
+                                        ? 'bg-emerald-500/15 text-emerald-400' 
+                                        : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    <span>{style.name}</span>
+                                    {isSelected && <Check className="w-3.5 h-3.5" />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </motion.div>
                         )}
                       </AnimatePresence>
                    </div>
 
                   <div className="flex gap-2">
-                     <button onClick={handleGenerateGroove} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-white transition-all group">
+                     <div className="relative">
+                       <button
+                          onClick={() => setIsBarsDropdownOpen(!isBarsDropdownOpen)}
+                          disabled={!isAudioUnlocked}
+                          className="flex items-center justify-center gap-1.5 h-full px-3 bg-white/[0.03] hover:bg-white/[0.08] border border-transparent hover:border-white/10 rounded-xl text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-all"
+                       >
+                          <ListOrdered className="w-4 h-4 text-slate-500" />
+                          {barsCount} <span className="hidden sm:inline">Bars</span>
+                       </button>
+
+                       {isBarsDropdownOpen && (
+                         <div className="fixed inset-0 z-40" onClick={() => setIsBarsDropdownOpen(false)} />
+                       )}
+                       <AnimatePresence>
+                          {isBarsDropdownOpen && (
+                            <motion.div
+                              key="bars-dropdown-menu"
+                              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                              className="absolute bottom-full right-0 mb-3 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50 p-1.5 min-w-[100px]"
+                            >
+                              {[1, 2, 4, 8].map((num) => (
+                                <button
+                                  key={`bars-opt-${num}`}
+                                  onClick={() => {
+                                    setBarsCount(num);
+                                    setIsBarsDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-center px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
+                                    barsCount === num 
+                                      ? 'bg-emerald-500/15 text-emerald-400' 
+                                      : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                                  }`}
+                                >
+                                  {num} Bars
+                                </button>
+                              ))}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                     </div>
+
+                     <button onClick={handleGenerateGroove} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-emerald-400 hover:text-emerald-300 hover:bg-emerald-400/10 border border-transparent hover:border-emerald-400/20 transition-all group" title="Generate New">
                         <RefreshCw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-500" />
                      </button>
-                     <button onClick={() => setIsLibraryOpen(true)} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-white transition-all">
+                     <button onClick={() => setIsLibraryOpen(true)} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-white transition-all" title="Library">
                         <FolderOpen className="w-4 h-4" />
                      </button>
-                     <button onClick={handleSaveGroove} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-emerald-400 transition-all">
+                     <button onClick={handleSaveGroove} disabled={!isAudioUnlocked} className="p-2.5 bg-white/[0.03] hover:bg-white/[0.08] rounded-xl text-slate-400 hover:text-emerald-400 transition-all" title="Save">
                         <Save className="w-4 h-4" />
                      </button>
                   </div>

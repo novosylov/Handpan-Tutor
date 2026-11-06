@@ -1,4 +1,6 @@
-export type NoteType = 'accent' | 'ghost' | 'slap' | 'rest' | 'empty';
+export type StepType = 'accent' | 'ghost' | 'slap' | 'rest' | 'empty';
+export type NoteType = StepType;
+export type ModifierType = 'harmonic' | 'choke' | 'none';
 
 export interface Note {
   id: string;
@@ -11,7 +13,7 @@ export interface Step {
   noteId: string | null;
   type: StepType;
   modifier?: ModifierType;
-  microOffset?: number; // ДОБАВИТЬ ЭТУ СТРОКУ
+  microOffset?: number;
 }
 
 export type DensityLevel = 1 | 2 | 3 | 4 | 5;

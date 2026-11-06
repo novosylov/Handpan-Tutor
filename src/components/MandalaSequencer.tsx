@@ -15,9 +15,14 @@ export const MandalaSequencer: React.FC<MandalaSequencerProps> = ({
   focusedBar, 
   onBarClick 
 }) => {
-  // 4 Bars = 4 Rings
-  // Inner Ring (Bar 1) -> Outer Ring (Bar 4)
-  const rings = [0, 1, 2, 3];
+  // Dynamic rings based on actual sequence length
+  const totalBars = Math.max(1, Math.ceil(sequence.length / 16));
+  const rings = Array.from({ length: totalBars }, (_, i) => i);
+
+  // Scaled radius math: ensure all rings fit comfortably within container
+  const maxRadius = 145;
+  const minRadius = 36;
+  const radiusStep = totalBars > 1 ? (maxRadius - minRadius) / (totalBars - 1) : 0;
 
   return (
     <div className="relative w-[280px] h-[280px] md:w-[320px] md:h-[320px] flex items-center justify-center">
@@ -27,14 +32,14 @@ export const MandalaSequencer: React.FC<MandalaSequencerProps> = ({
       {rings.map((barIndex) => {
         const isFocused = focusedBar === barIndex;
         const isDimmed = focusedBar !== null && !isFocused;
-        const radius = 40 + (barIndex * 35); // 40, 75, 110, 145 (px)
+        const radius = totalBars === 1 ? 80 : minRadius + (barIndex * radiusStep);
         
         // Get steps for this bar
         const barSteps = sequence.slice(barIndex * 16, (barIndex + 1) * 16);
 
         return (
           <div 
-            key={barIndex}
+            key={`mandala-ring-${barIndex}`}
             className={`absolute rounded-full border transition-all duration-300 cursor-pointer hover:border-emerald-500/50 hover:bg-emerald-500/5
               ${isFocused ? 'border-emerald-500/80 shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 'border-slate-800'}
               ${isDimmed ? 'opacity-20' : 'opacity-100'}
@@ -42,7 +47,7 @@ export const MandalaSequencer: React.FC<MandalaSequencerProps> = ({
             style={{
               width: radius * 2,
               height: radius * 2,
-              zIndex: 10 - barIndex
+              zIndex: 20 - barIndex
             }}
             onClick={() => onBarClick(barIndex)}
           >
@@ -77,7 +82,7 @@ export const MandalaSequencer: React.FC<MandalaSequencerProps> = ({
 
               return (
                 <div
-                  key={stepIndex}
+                  key={`mandala-step-${barIndex}-${stepIndex}`}
                   className={`absolute top-1/2 left-1/2 transition-all duration-75 ${dotClass}`}
                   style={{
                     transform: `translate(-50%, -50%) rotate(${angle}deg) translateY(-${radius}px) rotate(${-angle}deg)`,

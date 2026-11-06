@@ -50,7 +50,7 @@ class AudioEngine {
       }
       
       this.isInitialized = true;
-      console.log('Audio Engine Initialized [State-of-the-Art]');
+      console.log('Audio Engine Initialized');
     } catch (error) {
       console.error('Failed to initialize AudioContext:', error);
       throw new Error('Could not initialize audio engine. Your browser may not support Web Audio API.');

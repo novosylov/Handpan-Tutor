@@ -1,4 +1,4 @@
-import { Step } from '../types';
+import { Step, StepType, ModifierType } from '../types';
 import { HANDPAN_NOTES } from '../constants';
 
 // ==========================================
@@ -6,8 +6,6 @@ import { HANDPAN_NOTES } from '../constants';
 // ==========================================
 
 export type PhraseStructure = ('A' | 'B' | 'C' | 'D')[];
-export type StepType = 'empty' | 'accent' | 'ghost' | 'slap';
-export type ModifierType = 'harmonic' | 'choke' | 'none';
 
 // Расширяем локальный интерфейс (в types.ts нужно будет тоже добавить microOffset?: number)
 export interface EngineStep extends Step {
